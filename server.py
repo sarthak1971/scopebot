@@ -8,7 +8,7 @@ from typing import List, TypedDict
 import faiss
 from dotenv import load_dotenv
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel
 from langgraph.graph import END, StateGraph
 from langchain_groq import ChatGroq
@@ -79,26 +79,31 @@ DOCS = {}  # filename -> chunk count
 
 
 def read_pages(name: str, raw: bytes):
-    """Returns [(page_number_or_None, text)]. PDFs are read page by page so sources can cite pages."""
+    """Yields (page_number_or_None, text) one page at a time so PDFs are never fully held as text."""
     if name.lower().endswith(".pdf"):
         from pypdf import PdfReader
-        return [(i + 1, p.extract_text() or "") for i, p in enumerate(PdfReader(io.BytesIO(raw)).pages)]
-    return [(None, raw.decode("utf-8", errors="ignore"))]
+        for i, p in enumerate(PdfReader(io.BytesIO(raw)).pages):
+            yield i + 1, (p.extract_text() or "")
+    else:
+        yield None, raw.decode("utf-8", errors="ignore")
 
 
 def ingest(name: str, raw: bytes, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> int:
     size = max(100, size)
     sp = RecursiveCharacterTextSplitter(chunk_size=size, chunk_overlap=max(0, min(overlap, size // 2)))
-    docs = []
+    total, buf = 0, []
     for page, text in read_pages(name, raw):
         if text.strip():
             meta = {"source": name, **({"page": page} if page else {})}
-            docs += sp.create_documents([text], metadatas=[meta])
-    if not docs:
+            buf += sp.create_documents([text], metadatas=[meta])
+        if len(buf) >= 32:  # embed in small batches to keep peak RAM low
+            vectorstore.add_documents(buf); total += len(buf); buf = []
+    if buf:
+        vectorstore.add_documents(buf); total += len(buf)
+    if total == 0:
         raise ValueError("No readable text found in this file.")
-    vectorstore.add_documents(docs)
-    DOCS[name] = DOCS.get(name, 0) + len(docs)
-    return len(docs)
+    DOCS[name] = DOCS.get(name, 0) + total
+    return total
 
 
 KB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge")
@@ -212,12 +217,22 @@ async def chat(body: ChatIn):
                              headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
+MAX_UPLOAD = 10 * 1024 * 1024  # 10 MB
+
+
 @app.post("/api/upload")
-async def upload(file: UploadFile = File(...), chunk_size: int = Form(CHUNK_SIZE), chunk_overlap: int = Form(CHUNK_OVERLAP)):
+def upload(file: UploadFile = File(...), chunk_size: int = Form(CHUNK_SIZE), chunk_overlap: int = Form(CHUNK_OVERLAP)):
+    # Plain `def` => FastAPI runs it in a worker thread, so embedding does not block chat requests or health checks.
+    raw = file.file.read()
+    if len(raw) > MAX_UPLOAD:
+        return JSONResponse({"detail": "File is larger than 10 MB. Upload a smaller or text-only version."}, status_code=413)
     try:
-        n = ingest(file.filename, await file.read(), chunk_size, chunk_overlap)
+        n = ingest(file.filename, raw, chunk_size, chunk_overlap)
     except ValueError as e:
-        raise HTTPException(400, str(e))
+        return JSONResponse({"detail": str(e)}, status_code=400)
+    except Exception as e:
+        print("upload failed:", repr(e))
+        return JSONResponse({"detail": f"Indexing failed: {e}"}, status_code=500)
     return {"chunks": n, "total": vectorstore.index.ntotal}
 
 
