@@ -2,7 +2,7 @@
 Run:  uvicorn server:app --reload     then open http://localhost:8000
 Put the handbook (and any other .pdf/.txt/.md files) in ./knowledge/ - they are indexed at startup.
 """
-import io, json, os, re
+import io, json, os, re, shutil
 from typing import List, TypedDict
 
 import faiss
@@ -78,21 +78,106 @@ vectorstore = FAISS(
 DOCS = {}  # filename -> chunk count
 
 
-def read_pages(name: str, raw: bytes):
-    """Yields (page_number_or_None, text) one page at a time so PDFs are never fully held as text."""
-    if name.lower().endswith(".pdf"):
+# ---- OCR: scanned pages and images become searchable text (needs the Tesseract program installed) ----
+OCR_MODE = os.getenv("OCR_MODE", "auto").lower()          # auto = only pages with no text layer | always = every page | off
+OCR_MIN_CHARS = int(os.getenv("OCR_MIN_CHARS", "40"))      # a page with fewer text characters than this is treated as an image
+OCR_DPI = int(os.getenv("OCR_DPI", "200"))                 # render resolution: higher = more accurate but slower
+OCR_MAX_PAGES = int(os.getenv("OCR_MAX_PAGES", "60"))      # safety cap per file (OCR takes roughly 2-5 seconds per page)
+IMAGE_EXTS = (".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff", ".bmp")
+
+def find_tesseract():
+    """TESSERACT_CMD env var > PATH > the usual install locations (Windows installs are often not on PATH)."""
+    cmd = os.getenv("TESSERACT_CMD") or shutil.which("tesseract")
+    if cmd:
+        return cmd
+    for p in (r"C:\Program Files\Tesseract-OCR\tesseract.exe", r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+              "/opt/homebrew/bin/tesseract", "/usr/local/bin/tesseract", "/usr/bin/tesseract"):
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def check_ocr():
+    """Returns (ok, reason). Verifies the Python packages AND that the Tesseract program really runs."""
+    if OCR_MODE == "off":
+        return False, "OCR_MODE is set to off"
+    try:
+        import pytesseract, pypdfium2, PIL  # noqa: F401
+    except ImportError as e:
+        return False, f"Python package missing ({e.name}): run pip install -r requirements.txt"
+    cmd = find_tesseract()
+    if not cmd:
+        return False, "the Tesseract program was not found on this machine (install it, or set TESSERACT_CMD to its path)"
+    pytesseract.pytesseract.tesseract_cmd = cmd
+    try:
+        return True, f"Tesseract {pytesseract.get_tesseract_version()}"
+    except Exception as e:
+        return False, f"Tesseract was found at {cmd} but failed to run: {e}"
+
+
+OCR_OK, OCR_WHY = check_ocr()
+print(("OCR enabled: " if OCR_OK else "WARNING - OCR disabled: ") + OCR_WHY)
+
+
+def tidy_ocr(t: str) -> str:
+    lines = [re.sub(r"[ \t]+", " ", ln).strip() for ln in t.splitlines()]
+    return "\n".join(ln for ln in lines if sum(c.isalnum() for c in ln) >= 3)  # drop stray symbols / noise lines
+
+
+def ocr_image(img) -> str:
+    import pytesseract
+    return tidy_ocr(pytesseract.image_to_string(img))
+
+
+def read_pages(name: str, raw: bytes, stats: dict):
+    """Yields (page_number_or_None, text) one page at a time. Image-only PDF pages and image files are OCR'd."""
+    low = name.lower()
+    if low.endswith(".pdf"):
         from pypdf import PdfReader
-        for i, p in enumerate(PdfReader(io.BytesIO(raw)).pages):
-            yield i + 1, (p.extract_text() or "")
+        pdfium_doc = None
+        try:
+            for i, p in enumerate(PdfReader(io.BytesIO(raw)).pages):
+                text = p.extract_text() or ""
+                if OCR_OK and (OCR_MODE == "always" or len(text.strip()) < OCR_MIN_CHARS):
+                    if stats["ocr_pages"] >= OCR_MAX_PAGES:
+                        stats["ocr_skipped"] += 1
+                    else:
+                        import pypdfium2 as pdfium
+                        pdfium_doc = pdfium_doc or pdfium.PdfDocument(raw)
+                        page = pdfium_doc[i]
+                        img = page.render(scale=OCR_DPI / 72).to_pil()
+                        ocr = ocr_image(img)
+                        img.close(); page.close()
+                        stats["ocr_pages"] += 1
+                        if len(ocr) > len(text.strip()):
+                            text = ocr
+                yield i + 1, text
+        finally:
+            if pdfium_doc is not None:
+                pdfium_doc.close()
+    elif low.endswith(IMAGE_EXTS):
+        if not OCR_OK:
+            raise ValueError("OCR is not available on this server (Tesseract is not installed), so images cannot be read.")
+        from PIL import Image
+        stats["ocr_pages"] += 1
+        yield None, ocr_image(Image.open(io.BytesIO(raw)))
     else:
-        yield None, raw.decode("utf-8", errors="ignore")
+        text = raw.decode("utf-8", errors="ignore")
+        parts = re.split(r"^\[\[page (\d+)\]\]\s*$", text, flags=re.M)  # optional "[[page N]]" markers keep page citations
+        if len(parts) > 1:
+            for i in range(1, len(parts), 2):
+                yield int(parts[i]), parts[i + 1]
+        else:
+            yield None, text
 
 
-def ingest(name: str, raw: bytes, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP) -> int:
+def ingest(name: str, raw: bytes, size: int = CHUNK_SIZE, overlap: int = CHUNK_OVERLAP):
+    """Returns (chunk_count, stats) where stats = {"ocr_pages": n, "ocr_skipped": n}."""
     size = max(100, size)
     sp = RecursiveCharacterTextSplitter(chunk_size=size, chunk_overlap=max(0, min(overlap, size // 2)))
+    stats = {"ocr_pages": 0, "ocr_skipped": 0}
     total, buf = 0, []
-    for page, text in read_pages(name, raw):
+    for page, text in read_pages(name, raw, stats):
         if text.strip():
             meta = {"source": name, **({"page": page} if page else {})}
             buf += sp.create_documents([text], metadatas=[meta])
@@ -101,17 +186,19 @@ def ingest(name: str, raw: bytes, size: int = CHUNK_SIZE, overlap: int = CHUNK_O
     if buf:
         vectorstore.add_documents(buf); total += len(buf)
     if total == 0:
-        raise ValueError("No readable text found in this file.")
+        hint = "" if OCR_OK else " If this is a scanned file, install Tesseract on the server so OCR can read it."
+        raise ValueError("No readable text found in this file." + hint)
     DOCS[name] = DOCS.get(name, 0) + total
-    return total
+    return total, stats
 
 
 KB_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "knowledge")
 os.makedirs(KB_DIR, exist_ok=True)
 for fn in sorted(os.listdir(KB_DIR)):
-    if fn.lower().endswith((".pdf", ".txt", ".md")):
+    if fn.lower().endswith((".pdf", ".txt", ".md") + IMAGE_EXTS):
         with open(os.path.join(KB_DIR, fn), "rb") as f:
-            print(f"Indexed {fn}: {ingest(fn, f.read())} chunks")
+            n, st = ingest(fn, f.read())
+            print(f"Indexed {fn}: {n} chunks" + (f" ({st['ocr_pages']} pages read with OCR)" if st["ocr_pages"] else ""))
 
 
 def label(d: Document) -> str:
@@ -227,18 +314,19 @@ def upload(file: UploadFile = File(...), chunk_size: int = Form(CHUNK_SIZE), chu
     if len(raw) > MAX_UPLOAD:
         return JSONResponse({"detail": "File is larger than 10 MB. Upload a smaller or text-only version."}, status_code=413)
     try:
-        n = ingest(file.filename, raw, chunk_size, chunk_overlap)
+        n, st = ingest(file.filename, raw, chunk_size, chunk_overlap)
     except ValueError as e:
         return JSONResponse({"detail": str(e)}, status_code=400)
     except Exception as e:
         print("upload failed:", repr(e))
         return JSONResponse({"detail": f"Indexing failed: {e}"}, status_code=500)
-    return {"chunks": n, "total": vectorstore.index.ntotal}
+    return {"chunks": n, "total": vectorstore.index.ntotal, "ocr_pages": st["ocr_pages"], "ocr_skipped": st["ocr_skipped"]}
 
 
 @app.get("/api/stats")
 async def stats():
-    return {"total": vectorstore.index.ntotal, "docs": [{"name": k, "chunks": v} for k, v in DOCS.items()]}
+    return {"total": vectorstore.index.ntotal, "docs": [{"name": k, "chunks": v} for k, v in DOCS.items()],
+            "ocr": OCR_OK, "ocr_mode": OCR_MODE, "ocr_reason": OCR_WHY}  # lets the UI show whether OCR is actually working on this server
 
 
 @app.get("/")
