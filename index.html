@@ -85,9 +85,10 @@ details>summary{list-style:none}details>summary::-webkit-details-marker{display:
     <label id="drop" class="block rounded-xl border-2 border-dashed border-line hover:border-pri/60 bg-s-lowest/60 p-6 text-center cursor-pointer transition-colors">
       <span class="material-symbols-outlined text-pri !text-[32px]">folder_zip</span>
       <div class="font-semibold mt-1">Drop files here or <span class="text-pri">browse</span></div>
-      <div class="text-[12px] text-dim">PDF, Markdown or plain text</div>
-      <input id="file" type="file" multiple accept=".txt,.md,.pdf" hidden>
+      <div class="text-[12px] text-dim">PDF (scanned too), images, Markdown or plain text</div>
+      <input id="file" type="file" multiple accept=".txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp" hidden>
     </label>
+    <div id="ocrnote" class="text-[12px] font-mono text-dim"></div>
     <div id="queue" class="space-y-1.5"></div>
     <div class="grid sm:grid-cols-2 gap-3">
       <div class="bg-s rounded-xl p-3 space-y-1"><div class="flex justify-between text-[12px]"><span class="font-mono text-dim">CHUNK SIZE</span><span class="font-mono text-pri"><span id="csv">800</span> chars</span></div><input id="cs" type="range" min="200" max="2000" step="50" value="800" class="w-full accent-[#4cd7f6]"></div>
@@ -181,7 +182,7 @@ function openDrawer(m,j){dMsg=m||dMsg;const sr=dMsg?.trace?.sources||[];$('#dtit
 
 /* ---------- knowledge base + ingest ---------- */
 async function stats(){const t=performance.now();try{const j=await(await fetch('/api/stats')).json(),ms=Math.round(performance.now()-t);
-  $('#dot').className='w-2 h-2 rounded-full bg-sec animate-pulse';$('#status').textContent=`online · ${j.total} chunks · ${ms}ms`;$('#kbn').textContent=j.docs.length+' files';
+  $('#dot').className='w-2 h-2 rounded-full bg-sec animate-pulse';$('#ocrnote').innerHTML=j.ocr?'<span class="text-sec">✓ OCR is on</span> · scanned PDF pages and images will be read':'<span class="text-err">⚠ OCR is off</span> · '+esc(j.ocr_reason||'Tesseract is not installed on this server');$('#status').textContent=`online · ${j.total} chunks · ${ms}ms`;$('#kbn').textContent=j.docs.length+' files';
   const row=x=>`<div class="flex items-center justify-between px-2 py-1 rounded text-[13px] text-mute">${'<span class="flex items-center gap-2 truncate">'+ic('description','text-ter !text-[16px]')+'<span class="truncate">'+esc(x.name)+'</span></span>'}<span class="font-mono text-[11px] text-dim">${x.chunks}</span></div>`;
   $('#docs').innerHTML=j.docs.map(row).join('');$('#idocs').innerHTML=j.docs.map(x=>`<div class="flex justify-between bg-s-lowest px-3 py-1.5 rounded-lg text-[13px]"><span class="truncate">${esc(x.name)}</span><span class="font-mono text-[11px] text-sec">${x.chunks} chunks</span></div>`).join('')}
   catch(e){$('#dot').className='w-2 h-2 rounded-full bg-err';$('#status').textContent='server offline'}}
@@ -189,7 +190,7 @@ function drawQueue(){$('#queue').innerHTML=queue.map(q=>`<div class="flex items-
 const addFiles=fs=>{[...fs].forEach(f=>queue.push({f,s:'ready'}));drawQueue()};
 async function ingest(){$('#istart').disabled=true;for(const q of queue.filter(q=>q.s==='ready')){q.s='indexing…';drawQueue();
   const fd=new FormData();fd.append('file',q.f);fd.append('chunk_size',$('#cs').value);fd.append('chunk_overlap',$('#co').value);
-  try{const r=await fetch('/api/upload',{method:'POST',body:fd}),j=await r.json();if(!r.ok)throw new Error(j.detail||r.status);q.s=`✓ ${j.chunks} chunks`}catch(e){q.s='✗ '+e.message}drawQueue()}
+  try{const r=await fetch('/api/upload',{method:'POST',body:fd}),raw=await r.text();let j={};try{j=JSON.parse(raw)}catch(_){}if(!r.ok||j.chunks==null)throw new Error(j.detail||`server returned ${r.status} ${raw?raw.slice(0,60):'with an empty body (the server probably ran out of memory or timed out - check the host logs)'}`);q.s=`✓ ${j.chunks} chunks`+(j.ocr_pages?` · OCR ${j.ocr_pages} pg`:'')+(j.ocr_skipped?` · ${j.ocr_skipped} pg skipped (OCR limit)`:'')}catch(e){q.s='✗ '+e.message}drawQueue()}
   stats();toast('Knowledge base updated')}
 const modal=v=>{$('#ing').classList.toggle('hidden',!v);$('#ing').classList.toggle('flex',v);if(v)stats()};
 
