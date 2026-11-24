@@ -1,3 +1,3 @@
-// Put your backend URL here (no trailing slash), e.g. "https://agentic-rag.onrender.com"
+// Put your backend URL here (no trailing slash), 
 // Leave it empty ("") only if the backend serves this page itself.
-window.API_BASE = "https://YOUR-BACKEND.onrender.com";
+window.API_BASE = "https://scopebot.onrender.com";
