@@ -344,4 +344,9 @@ async def stats():
 
 @app.get("/")
 async def index():
-    return FileResponse(os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html"))
+    # In the split deployment the page lives on Vercel, so this server has no index.html: answer with a status message
+    # (a 200 here also keeps health checks that probe "/" happy). If index.html is present next to this file, serve it.
+    page = os.path.join(os.path.dirname(os.path.abspath(__file__)), "index.html")
+    if os.path.exists(page):
+        return FileResponse(page)
+    return JSONResponse({"service": "HR assistant API", "status": "ok", "health": "/api/health", "stats": "/api/stats"})
