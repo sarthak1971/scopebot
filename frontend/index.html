@@ -1,0 +1,219 @@
+<!DOCTYPE html>
+<html class="dark" lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AgenticRAG</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com/3.4.17"></script>
+<script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"></script>
+<script>tailwind.config={theme:{extend:{colors:{surface:'#0f131c','s-lowest':'#0a0e17','s-low':'#181b25',s:'#1c1f29','s-high':'#262a34','s-highest':'#31353f',ink:'#dfe2ef',mute:'#bcc9cd',dim:'#869397',line:'#3d494c',pri:'#4cd7f6','pri-c':'#06b6d4','on-pri':'#003640',sec:'#4edea3',ter:'#ddb7ff',err:'#ffb4ab'},fontFamily:{sans:['Inter','system-ui','sans-serif'],mono:['JetBrains Mono','monospace']}}}}</script>
+<style>
+body{font-family:Inter,system-ui,sans-serif}::-webkit-scrollbar{width:0;height:0}
+.material-symbols-outlined{font-size:18px;line-height:1;vertical-align:middle;user-select:none}
+.md{line-height:1.65}.md p{margin:.5em 0}.md ul{list-style:disc;padding-left:1.25rem}.md ol{list-style:decimal;padding-left:1.25rem}
+.md code{font-family:'JetBrains Mono',monospace;font-size:.85em;background:#262a34;padding:1px 5px;border-radius:4px}
+.md pre{background:#0a0e17;border-radius:12px;padding:12px;overflow:auto;position:relative;margin:.6em 0}.md pre code{background:none;padding:0}
+.md pre button{position:absolute;top:6px;right:6px;font-size:11px;color:#869397;border:1px solid #3d494c;border-radius:6px;padding:1px 8px}
+.md table{border-collapse:collapse}.md td,.md th{border:1px solid #3d494c66;padding:5px 10px;text-align:left}.md a{color:#4cd7f6}.md h1,.md h2,.md h3{font-weight:600;margin:.8em 0 .3em}
+.cur::after{content:"";display:inline-block;width:7px;height:1em;background:#4cd7f6;margin-left:2px;vertical-align:-2px;animation:bl 1s steps(2) infinite}@keyframes bl{50%{opacity:0}}
+details>summary{list-style:none}details>summary::-webkit-details-marker{display:none}details[open] .chev{transform:rotate(180deg)}
+@media(prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+</style>
+</head>
+<body class="bg-surface text-ink antialiased h-screen overflow-hidden selection:bg-pri-c selection:text-on-pri">
+
+<aside id="side" class="fixed inset-y-0 left-0 w-72 bg-s-low z-40 flex flex-col -translate-x-full md:translate-x-0 transition-transform">
+  <div class="p-3 flex items-center gap-2">
+    <div class="w-7 h-7 rounded-lg bg-s-high grid place-items-center overflow-hidden"><img src="/static/logo.png" alt="" class="w-full h-full object-contain" onerror="this.replaceWith(Object.assign(document.createElement('span'),{className:'material-symbols-outlined text-pri',textContent:'hub'}))"></div>
+    <span class="font-semibold tracking-tight">AgenticRAG</span>
+  </div>
+  <div class="px-3 pb-2"><button id="new" class="w-full flex items-center justify-between px-3 py-2 rounded-lg bg-s-high hover:bg-s-highest font-semibold text-[15px] transition-colors"><span class="flex items-center gap-2"><span class="material-symbols-outlined text-pri">edit_square</span>New chat</span><kbd class="font-mono text-[10px] text-mute bg-s-lowest px-1.5 py-0.5 rounded">Ctrl K</kbd></button></div>
+  <div id="list" class="flex-1 overflow-y-auto px-3 space-y-3"></div>
+  <div class="px-3 pt-2 pb-3 space-y-1 border-t border-line/30">
+    <div class="flex items-center justify-between px-1 text-[10px] font-mono uppercase tracking-wider text-dim"><span>Knowledge base</span><span id="kbn" class="text-sec"></span></div>
+    <div id="docs" class="space-y-0.5 max-h-32 overflow-y-auto"></div>
+    <button class="open-ing w-full flex items-center gap-2 px-2 py-1.5 rounded bg-s hover:bg-s-high text-pri text-[13px] transition-colors"><span class="material-symbols-outlined">add</span>Add documents</button>
+    <button id="clear" class="w-full text-left px-2 py-1 text-[12px] text-dim hover:text-ink">Clear all chats</button>
+  </div>
+</aside>
+<div id="shade" class="fixed inset-0 bg-black/50 z-30 hidden md:hidden"></div>
+
+<div class="md:pl-72 h-full flex flex-col relative">
+  <header class="h-14 shrink-0 flex items-center justify-between px-4 bg-surface/80 backdrop-blur-xl border-b border-line/20 z-20">
+    <div class="flex items-center gap-2 min-w-0">
+      <button id="menu" class="md:hidden p-1.5 rounded text-mute hover:bg-s-high" aria-label="Menu"><span class="material-symbols-outlined">menu</span></button>
+      <div class="flex items-center gap-2 bg-s px-2.5 py-1 rounded-lg min-w-0"><span class="material-symbols-outlined text-pri">smart_toy</span><span class="font-semibold text-[14px] truncate" id="title">ESDS HR Assistant</span></div>
+      <span class="hidden sm:inline font-mono text-[11px] text-dim">openai/gpt-oss-120b · Groq</span>
+    </div>
+    <div class="flex items-center gap-2">
+      <button id="chunks-btn" class="hidden sm:flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-s hover:bg-s-high text-mute hover:text-ink text-[13px]"><span class="material-symbols-outlined">layers</span>Chunks</button>
+      <div class="flex items-center gap-1.5 bg-s-low px-2.5 py-1 rounded-full"><span id="dot" class="w-2 h-2 rounded-full bg-dim"></span><span id="status" class="font-mono text-[11px] text-mute">connecting</span></div>
+    </div>
+  </header>
+
+  <div id="scroll" class="flex-1 overflow-y-auto scroll-smooth"><div id="msgs" class="max-w-3xl mx-auto px-4 pt-6 pb-44 space-y-8"></div></div>
+  <button id="down" class="hidden absolute bottom-32 left-1/2 -translate-x-1/2 bg-s-high border border-line/40 rounded-full px-3 py-1 text-[12px] z-10">↓ Latest</button>
+
+  <div class="absolute bottom-0 inset-x-0 pt-8 pb-4 px-4 bg-gradient-to-t from-surface via-surface/90 to-transparent pointer-events-none z-10">
+    <div class="max-w-3xl mx-auto pointer-events-auto">
+      <div class="flex items-end gap-1.5 bg-s-high/90 backdrop-blur-xl rounded-3xl p-2 shadow-xl border border-line/30 focus-within:ring-2 focus-within:ring-pri/40 transition-all">
+        <button class="open-ing w-9 h-9 shrink-0 rounded-full bg-s hover:bg-s-highest text-mute hover:text-ink grid place-items-center" title="Add documents to the knowledge base" aria-label="Add documents"><span class="material-symbols-outlined">add</span></button>
+        <textarea id="in" rows="1" placeholder="Ask about ESDS HR policies…" aria-label="Message" class="flex-1 bg-transparent placeholder:text-dim outline-none resize-none py-2 px-1 max-h-48 min-w-0"></textarea>
+        <button id="send" aria-label="Send" class="w-9 h-9 shrink-0 rounded-full bg-pri text-on-pri grid place-items-center hover:brightness-110 transition"><span class="material-symbols-outlined">arrow_upward</span></button>
+      </div>
+      <p class="text-center font-mono text-[10px] text-dim pt-2">Enter to send · Shift+Enter for a new line · answers come only from the ESDS Employee Handbook · confirm important decisions with HR</p>
+    </div>
+  </div>
+</div>
+
+<!-- Chunks drawer -->
+<aside id="drawer" class="fixed right-0 top-14 bottom-0 w-full sm:w-96 bg-s-low/95 backdrop-blur-xl shadow-2xl p-4 z-40 translate-x-full transition-transform duration-300 flex flex-col gap-3">
+  <div class="flex items-center justify-between"><h4 id="dtitle" class="font-semibold flex items-center gap-2"><span class="material-symbols-outlined text-pri">dataset</span>Retrieved chunks</h4><button id="dclose" class="p-1 text-dim hover:text-ink" aria-label="Close"><span class="material-symbols-outlined">close</span></button></div>
+  <div id="dbody" class="flex-1 overflow-y-auto space-y-3"></div>
+</aside>
+
+<!-- Ingest modal -->
+<div id="ing" class="fixed inset-0 z-50 hidden items-center justify-center p-4 bg-s-lowest/80 backdrop-blur-md">
+  <div class="w-full max-w-xl bg-s-low border border-line/50 rounded-2xl shadow-2xl p-5 space-y-4 max-h-[92vh] overflow-y-auto">
+    <div class="flex items-start justify-between">
+      <div><h3 class="text-lg font-semibold tracking-tight">Add documents</h3><p class="text-[13px] text-mute">Files are split into chunks, embedded and added to the live vector store.</p></div>
+      <button id="iclose" class="p-1 text-dim hover:text-ink" aria-label="Close"><span class="material-symbols-outlined">close</span></button>
+    </div>
+    <label id="drop" class="block rounded-xl border-2 border-dashed border-line hover:border-pri/60 bg-s-lowest/60 p-6 text-center cursor-pointer transition-colors">
+      <span class="material-symbols-outlined text-pri !text-[32px]">folder_zip</span>
+      <div class="font-semibold mt-1">Drop files here or <span class="text-pri">browse</span></div>
+      <div class="text-[12px] text-dim">PDF (scanned too), images, Markdown or plain text</div>
+      <input id="file" type="file" multiple accept=".txt,.md,.pdf,.png,.jpg,.jpeg,.webp,.tif,.tiff,.bmp" hidden>
+    </label>
+    <div id="ocrnote" class="text-[12px] font-mono text-dim"></div>
+    <div id="queue" class="space-y-1.5"></div>
+    <div class="grid sm:grid-cols-2 gap-3">
+      <div class="bg-s rounded-xl p-3 space-y-1"><div class="flex justify-between text-[12px]"><span class="font-mono text-dim">CHUNK SIZE</span><span class="font-mono text-pri"><span id="csv">800</span> chars</span></div><input id="cs" type="range" min="200" max="2000" step="50" value="800" class="w-full accent-[#4cd7f6]"></div>
+      <div class="bg-s rounded-xl p-3 space-y-1"><div class="flex justify-between text-[12px]"><span class="font-mono text-dim">OVERLAP</span><span class="font-mono text-pri"><span id="cov">100</span> chars</span></div><input id="co" type="range" min="0" max="400" step="10" value="100" class="w-full accent-[#4cd7f6]"></div>
+    </div>
+    <div><div class="font-mono text-[10px] uppercase text-dim mb-1">Currently indexed</div><div id="idocs" class="space-y-1 max-h-28 overflow-y-auto"></div></div>
+    <div class="flex justify-end gap-2 pt-1"><button id="icancel" class="px-4 py-2 rounded-xl text-mute hover:bg-s hover:text-ink text-[14px]">Close</button><button id="istart" class="px-5 py-2 rounded-xl bg-pri text-on-pri font-semibold text-[14px] hover:brightness-110 disabled:opacity-40 flex items-center gap-2" disabled><span class="material-symbols-outlined">auto_awesome</span>Index files</button></div>
+  </div>
+</div>
+<div id="toast" class="fixed bottom-28 left-1/2 -translate-x-1/2 translate-y-4 opacity-0 bg-ink text-surface px-4 py-2 rounded-xl text-[14px] transition-all pointer-events-none z-[60]"></div>
+
+<script src="config.js"></script>
+<script>
+const API=(window.API_BASE||'').replace(/\/$/,'');   // set in config.js; empty = same server
+let statsTries=0;
+const $=s=>document.querySelector(s),esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const ic=(n,c='')=>`<span class="material-symbols-outlined ${c}">${n}</span>`;
+const md=t=>{try{return DOMPurify.sanitize(marked.parse(t))}catch(e){return '<p>'+esc(t)+'</p>'}};
+const load=()=>{try{return JSON.parse(localStorage.getItem('rag.chats'))||[]}catch(e){return[]}};
+let chats=load(),cur=null,ctrl=null,busy=false,dMsg=null,queue=[];
+const save=()=>{try{localStorage.setItem('rag.chats',JSON.stringify(chats))}catch(e){}};
+const chat=()=>chats.find(c=>c.id===cur);
+const toast=m=>{const t=$('#toast');t.textContent=m;t.classList.remove('opacity-0','translate-y-4');clearTimeout(t._t);t._t=setTimeout(()=>t.classList.add('opacity-0','translate-y-4'),2600)};
+const SUG=[['How many privilege leaves do employees get each year?','event_available','Leave Policy'],['What is the notice period for resignation?','logout','Exit Policy'],['What is the fuel reimbursement for using my own vehicle?','directions_car','Travel Policy'],['Explain the late coming and half-day rules.','schedule','Attendance Policy']];
+const secs=ms=>(ms/1000).toFixed(ms<1000?2:1)+'s';
+
+/* ---------- sidebar ---------- */
+function newChat(){if(busy)return;const c={id:Date.now().toString(36),title:'New chat',created:Date.now(),messages:[]};chats.unshift(c);cur=c.id;save();draw();closeSide();$('#in').focus()}
+function drawList(){const L=$('#list');L.innerHTML='';const today=new Date().toDateString();
+  [['Today',c=>new Date(c.created||0).toDateString()===today],['Earlier',c=>new Date(c.created||0).toDateString()!==today]].forEach(([name,f])=>{
+    const items=chats.filter(f);if(!items.length)return;const g=document.createElement('div');
+    g.innerHTML=`<div class="font-mono text-[10px] uppercase tracking-wider text-dim px-1 py-1">${name}</div>`;
+    items.forEach(c=>{const r=document.createElement('div');r.className='group flex items-center rounded px-2 '+(c.id===cur?'bg-s text-ink font-medium':'text-mute hover:bg-s hover:text-ink');
+      r.innerHTML=`<button class="flex-1 flex items-center gap-2 py-1.5 truncate text-left text-[13px]">${ic('chat_bubble','text-dim !text-[16px]')}<span class="truncate">${esc(c.title)}</span></button><button class="opacity-0 group-hover:opacity-100 text-dim hover:text-err" aria-label="Delete">${ic('close','!text-[16px]')}</button>`;
+      r.children[0].onclick=()=>{if(busy)return;cur=c.id;draw();closeSide()};
+      r.children[1].onclick=()=>{if(busy)return;chats=chats.filter(x=>x.id!==c.id);if(cur===c.id)cur=chats[0]?.id;if(!cur)return newChat();save();draw()};g.append(r)});L.append(g)})}
+const openSide=()=>{$('#side').classList.remove('-translate-x-full');$('#shade').classList.remove('hidden')},closeSide=()=>{$('#side').classList.add('-translate-x-full');$('#shade').classList.add('hidden')};
+
+/* ---------- messages ---------- */
+function msgEl(m,last){const d=document.createElement('div');d.className='flex gap-3';
+  if(m.role==='user'){d.innerHTML=`<div class="w-8 h-8 rounded-full bg-pri grid place-items-center shrink-0 mt-0.5">${ic('person','text-on-pri')}</div><div class="bg-s-high/80 rounded-2xl rounded-tl-sm px-4 py-2.5 whitespace-pre-wrap break-words max-w-[88%]">${esc(m.content)}</div>`;return d}
+  d.innerHTML=`<div class="w-8 h-8 rounded-lg bg-s-high grid place-items-center shrink-0 mt-0.5">${ic('hub','text-pri')}</div><div class="flex-1 min-w-0 space-y-3"><div class="tr"></div><div class="md"></div><div class="src flex flex-wrap gap-2"></div><div class="tool"></div></div>`;
+  trace(d,m,false);body(d,m,false,last);return d}
+function trace(d,m,live){const t=m.trace,box=d.querySelector('.tr');if(!t){box.innerHTML='';return}
+  const open=box.querySelector('details')?.open??live,S=t.st||{},M=t.ms||{},n=(t.sources||[]).length;
+  const rows=[['decide','Route question','A keyword router decides whether the question needs the knowledge base.'],
+    ['retrieve','Retrieve context',S.retrieve==='skipped'?'Skipped — the router chose to answer directly.':n?`${n} relevant chunk${n>1?'s':''} passed the relevance threshold.`:S.retrieve==='done'?'No chunk passed the relevance threshold — question is out of scope.':'Searching the vector store…'],
+    ['generate','Generate answer','Streaming from openai/gpt-oss-120b.']];
+  const tot=Object.values(M).reduce((a,b)=>a+b,0),done=rows.filter(r=>S[r[0]]==='done'||S[r[0]]==='skipped').length;
+  box.innerHTML=`<details ${open?'open':''} class="rounded-xl bg-s-lowest overflow-hidden"><summary class="flex items-center justify-between px-3 py-2 cursor-pointer select-none bg-s-low/60 hover:bg-s-low text-[13px]"><span class="flex items-center gap-2">${ic('account_tree','text-pri !text-[16px]')}<b class="font-semibold">Agent trace</b><span class="font-mono text-[11px] bg-s px-1.5 py-0.5 rounded text-mute">${done}/3 steps${tot?' · '+secs(tot):''}</span></span>${ic('expand_more','chev text-dim transition-transform')}</summary><div class="p-3 space-y-2.5 font-mono text-[11px] text-mute">${rows.map(([k,l,desc],i)=>{const s=S[k]||'idle',c=s==='done'?'text-pri':s==='running'?'text-sec animate-pulse':'text-dim';
+    return `<div class="flex gap-2.5"><div class="w-5 h-5 rounded-full bg-s grid place-items-center shrink-0 text-[11px] font-semibold ${c}">${s==='done'?'✓':i+1}</div><div class="flex-1"><div class="flex justify-between"><span class="${s==='skipped'?'line-through text-dim':'text-ink font-medium'}">${l}</span><span class="text-dim">${s==='skipped'?'skipped':M[k]?secs(M[k]):s==='running'?'running…':''}</span></div><p class="text-dim">${desc}</p></div></div>`}).join('')}</div></details>`}
+function body(d,m,live,last){const b=d.querySelector('.md');b.innerHTML=md(m.content||'');b.classList.toggle('cur',live);
+  b.querySelectorAll('pre').forEach(p=>{const x=document.createElement('button');x.textContent='Copy';x.onclick=()=>{navigator.clipboard.writeText(p.innerText.replace(/Copy$/,'').trim());x.textContent='Copied';setTimeout(()=>x.textContent='Copy',1500)};p.append(x)});
+  if(m.err)b.innerHTML+=`<p class="text-err">${esc(m.err)}</p>`;
+  const sr=(m.trace?.sources)||[];d.querySelector('.src').innerHTML=sr.map((s,j)=>`<button data-j="${j}" class="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-s-high text-sec font-mono text-[11px] hover:bg-s-highest">[${j+1}] ${esc(s.source)}</button>`).join('');
+  d.querySelectorAll('.src button').forEach(x=>x.onclick=()=>openDrawer(m,+x.dataset.j));
+  const T=d.querySelector('.tool');if(live){T.innerHTML='';return}
+  const ts=m.trace;T.innerHTML=`<div class="flex flex-wrap items-center justify-between gap-2 pt-1 text-dim"><div class="flex items-center gap-1"><button data-a="copy" title="Copy" class="p-1.5 rounded-lg hover:bg-s hover:text-ink">${ic('content_copy')}</button>${last?`<button data-a="regen" title="Regenerate" class="p-1.5 rounded-lg hover:bg-s hover:text-ink">${ic('replay')}</button>`:''}${sr.length?`<button data-a="insp" class="px-2 py-1 rounded-lg hover:bg-s hover:text-pri text-[13px] flex items-center gap-1">${ic('travel_explore','!text-[16px]')}Inspect chunks (${sr.length})</button>`:''}</div><span class="font-mono text-[11px]">${ts?.ttft?`first token ${secs(ts.ttft)} · `:''}${ts?.total?`total ${secs(ts.total)}`:''}</span></div>`;
+  T.onclick=e=>{const a=e.target.closest('button')?.dataset.a;if(a==='copy'){navigator.clipboard.writeText(m.content);toast('Copied')}if(a==='regen')regen();if(a==='insp')openDrawer(m)}}
+function draw(){const c=chat();$('#title').textContent=c.title==='New chat'?'ESDS HR Assistant':c.title;drawList();const w=$('#msgs');w.innerHTML='';
+  if(!c.messages.length){w.innerHTML=`<div class="text-center pt-[10vh]"><div class="w-12 h-12 mx-auto rounded-2xl bg-s-high grid place-items-center mb-4">${ic('hub','text-pri !text-[28px]')}</div><h2 class="text-3xl font-semibold tracking-tight">How can I help you today?</h2><p class="text-mute mt-1 mb-6">Ask about leave, attendance, travel, code of conduct, referral bonus, exit and other ESDS HR policies. Answers come from the Employee Handbook.</p><div class="grid sm:grid-cols-2 gap-3 text-left" id="sug"></div></div>`;
+    SUG.forEach(([q,i,s])=>{const b=document.createElement('button');b.className='bg-s-low hover:bg-s border border-line/30 hover:border-pri/50 rounded-xl p-3 transition-colors';b.innerHTML=`<div class="flex items-center gap-2 font-medium">${ic(i,'text-pri')}${esc(q)}</div><div class="text-[12px] text-dim mt-0.5">${s}</div>`;b.onclick=()=>send(q);$('#sug').append(b)})}
+  c.messages.forEach((m,i)=>w.append(msgEl(m,i===c.messages.length-1)));toBottom(true)}
+const toBottom=f=>{const s=$('#scroll');if(f||s.scrollHeight-s.scrollTop-s.clientHeight<160)s.scrollTop=s.scrollHeight};
+
+/* ---------- streaming ---------- */
+function setBusy(v){busy=v;$('#send').innerHTML=ic(v?'stop':'arrow_upward');$('#send').setAttribute('aria-label',v?'Stop':'Send')}
+async function run(c){
+  const m={role:'assistant',content:'',trace:{st:{},ms:{},sources:[]}};c.messages.push(m);setBusy(true);draw();
+  const el=$('#msgs').lastElementChild;trace(el,m,true);body(el,m,true);
+  const q=c.messages[c.messages.length-2].content,hist=c.messages.slice(0,-2).map(x=>({role:x.role,content:x.content})),t0=performance.now(),st0={};
+  ctrl=new AbortController();
+  try{
+    const r=await fetch(API+'/api/chat',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({question:q,history:hist}),signal:ctrl.signal});
+    if(!r.ok)throw new Error('Server returned '+r.status);
+    const rd=r.body.getReader(),dec=new TextDecoder();let buf='';
+    for(;;){const {done,value}=await rd.read();if(done)break;buf+=dec.decode(value,{stream:true});const parts=buf.split('\n\n');buf=parts.pop();
+      for(const p of parts){if(!p.startsWith('data: '))continue;const e=JSON.parse(p.slice(6)),T=m.trace,now=performance.now();
+        if(e.type==='step'){T.st[e.node]=e.status;if(e.status==='running')st0[e.node]=now;if(e.status==='done'&&st0[e.node])T.ms[e.node]=now-st0[e.node];trace(el,m,true)}
+        else if(e.type==='sources'){T.sources=e.items;trace(el,m,true);body(el,m,true)}
+        else if(e.type==='token'){if(!T.ttft)T.ttft=now-t0;m.content+=e.text;const b=el.querySelector('.md');b.innerHTML=md(m.content);b.classList.add('cur');toBottom()}
+        else if(e.type==='error')throw new Error(e.message)}}
+  }catch(e){if(e.name!=='AbortError')m.err='Something went wrong: '+e.message+'. Check that the server is running and GROQ_API_KEY is set.'}
+  m.trace.total=performance.now()-t0;if(!m.content&&!m.err)m.content='_Stopped._';
+  ctrl=null;setBusy(false);save();draw();
+}
+function send(text){if(busy)return;text=(text||'').trim();if(!text)return;const c=chat();if(!c.messages.length)c.title=text.slice(0,42);c.messages.push({role:'user',content:text});$('#in').value='';grow();run(c)}
+function regen(){if(busy)return;const c=chat();if(c.messages.at(-1)?.role==='assistant')c.messages.pop();run(c)}
+
+/* ---------- drawer ---------- */
+function openDrawer(m,j){dMsg=m||dMsg;const sr=dMsg?.trace?.sources||[];$('#dtitle').lastChild.textContent=` Retrieved chunks (${sr.length})`;
+  $('#dbody').innerHTML=sr.length?sr.map((s,i)=>`<div id="ch${i}" class="bg-s rounded-xl p-3 space-y-1.5 ${i===j?'ring-1 ring-pri':''}"><div class="flex justify-between font-mono text-[11px]"><span class="text-sec">[${i+1}] chunk</span><span class="text-dim">${esc(s.source)}</span></div><p class="font-mono text-[11px] text-mute bg-s-lowest p-2 rounded leading-normal whitespace-pre-wrap">${esc(s.text)}</p></div>`).join(''):'<p class="text-dim text-[13px]">No chunks for this answer — the router skipped retrieval, or nothing has been asked yet.</p>';
+  $('#drawer').classList.remove('translate-x-full');if(j!=null)$('#ch'+j)?.scrollIntoView({block:'nearest'})}
+
+/* ---------- knowledge base + ingest ---------- */
+async function stats(){const t=performance.now();try{const j=await(await fetch(API+'/api/stats')).json(),ms=Math.round(performance.now()-t);
+  statsTries=0;$('#dot').className='w-2 h-2 rounded-full bg-sec animate-pulse';$('#ocrnote').innerHTML=j.ocr?'<span class="text-sec">✓ OCR is on</span> · scanned PDF pages and images will be read':'<span class="text-err">⚠ OCR is off</span> · '+esc(j.ocr_reason||'Tesseract is not installed on this server');$('#status').textContent=`online · ${j.total} chunks · ${ms}ms`;$('#kbn').textContent=j.docs.length+' files';
+  const row=x=>`<div class="flex items-center justify-between px-2 py-1 rounded text-[13px] text-mute">${'<span class="flex items-center gap-2 truncate">'+ic('description','text-ter !text-[16px]')+'<span class="truncate">'+esc(x.name)+'</span></span>'}<span class="font-mono text-[11px] text-dim">${x.chunks}</span></div>`;
+  $('#docs').innerHTML=j.docs.map(row).join('');$('#idocs').innerHTML=j.docs.map(x=>`<div class="flex justify-between bg-s-lowest px-3 py-1.5 rounded-lg text-[13px]"><span class="truncate">${esc(x.name)}</span><span class="font-mono text-[11px] text-sec">${x.chunks} chunks</span></div>`).join('')}
+  catch(e){$('#dot').className='w-2 h-2 rounded-full bg-err';$('#status').textContent=statsTries<15?'waking server…':'server offline';if(statsTries++<15)setTimeout(stats,5000)}}
+function drawQueue(){$('#queue').innerHTML=queue.map(q=>`<div class="flex items-center justify-between bg-s rounded-lg px-3 py-2 text-[13px]"><span class="truncate flex items-center gap-2">${ic('description','text-pri')}${esc(q.f.name)}<span class="font-mono text-[11px] text-dim">${(q.f.size/1024).toFixed(0)} KB</span></span><span class="font-mono text-[11px] ${q.s.startsWith('✓')?'text-sec':q.s.startsWith('✗')?'text-err':'text-mute'}">${esc(q.s)}</span></div>`).join('');$('#istart').disabled=!queue.some(q=>q.s==='ready')}
+const addFiles=fs=>{[...fs].forEach(f=>queue.push({f,s:'ready'}));drawQueue()};
+async function ingest(){$('#istart').disabled=true;for(const q of queue.filter(q=>q.s==='ready')){q.s='indexing…';drawQueue();
+  const fd=new FormData();fd.append('file',q.f);fd.append('chunk_size',$('#cs').value);fd.append('chunk_overlap',$('#co').value);
+  try{const r=await fetch(API+'/api/upload',{method:'POST',body:fd}),raw=await r.text();let j={};try{j=JSON.parse(raw)}catch(_){}if(!r.ok||j.chunks==null)throw new Error(j.detail||`server returned ${r.status} ${raw?raw.slice(0,60):'with an empty body (the server probably ran out of memory or timed out - check the host logs)'}`);q.s=`✓ ${j.chunks} chunks`+(j.ocr_pages?` · OCR ${j.ocr_pages} pg`:'')+(j.ocr_skipped?` · ${j.ocr_skipped} pg skipped (OCR limit)`:'')}catch(e){q.s='✗ '+e.message}drawQueue()}
+  stats();toast('Knowledge base updated')}
+const modal=v=>{$('#ing').classList.toggle('hidden',!v);$('#ing').classList.toggle('flex',v);if(v)stats()};
+
+/* ---------- wiring ---------- */
+const ta=$('#in'),grow=()=>{ta.style.height='auto';ta.style.height=Math.min(ta.scrollHeight,192)+'px'};
+ta.oninput=grow;ta.onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey&&!e.isComposing){e.preventDefault();send(ta.value)}};
+$('#send').onclick=()=>busy?ctrl?.abort():send(ta.value);
+$('#new').onclick=newChat;$('#menu').onclick=openSide;$('#shade').onclick=closeSide;
+$('#clear').onclick=()=>{if(!busy&&confirm('Delete all chats?')){chats=[];newChat()}};
+$('#chunks-btn').onclick=()=>$('#drawer').classList.contains('translate-x-full')?openDrawer(chat().messages.filter(m=>m.trace?.sources?.length).at(-1)):$('#drawer').classList.add('translate-x-full');
+$('#dclose').onclick=()=>$('#drawer').classList.add('translate-x-full');
+document.querySelectorAll('.open-ing').forEach(b=>b.onclick=()=>modal(true));
+$('#iclose').onclick=$('#icancel').onclick=()=>modal(false);$('#ing').onclick=e=>{if(e.target.id==='ing')modal(false)};
+$('#file').onchange=e=>{addFiles(e.target.files);e.target.value=''};
+const dz=$('#drop');['dragover','dragenter'].forEach(v=>dz.addEventListener(v,e=>{e.preventDefault();dz.classList.add('border-pri')}));
+['dragleave','drop'].forEach(v=>dz.addEventListener(v,e=>{e.preventDefault();dz.classList.remove('border-pri')}));dz.addEventListener('drop',e=>addFiles(e.dataTransfer.files));
+$('#cs').oninput=e=>$('#csv').textContent=e.target.value;$('#co').oninput=e=>$('#cov').textContent=e.target.value;$('#istart').onclick=ingest;
+$('#scroll').onscroll=e=>{const s=e.target;$('#down').classList.toggle('hidden',s.scrollHeight-s.scrollTop-s.clientHeight<240)};$('#down').onclick=()=>toBottom(true);
+document.addEventListener('keydown',e=>{if((e.ctrlKey||e.metaKey)&&e.key==='k'){e.preventDefault();newChat()}if(e.key==='Escape'){modal(false);$('#drawer').classList.add('translate-x-full');closeSide()}});
+cur=chats[0]?.id;if(!cur)newChat();else draw();stats();
+</script>
+</body>
+</html>
